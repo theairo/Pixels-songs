@@ -10,20 +10,22 @@ import os
 
 # --- CONFIGURATION ---
 IMAGE_PATH = "image.png"
-MIDI_PATH = "Jazz_Suite_No._2_II._Lyric_Waltz__Dmitri_Shostakovich.mid"
-AUDIO_PATH = "Jazz_Suite_No._2_II._Lyric_Waltz__Dmitri_Shostakovich.mp3"
+MIDI_PATH = "Etude_Op.25_No.11_in_A_minor_Winter_Wind_-_F._Chopin.mid"
+AUDIO_PATH = "Etude_Op.25_No.11_in_A_minor_Winter_Wind_-_F._Chopin.mp3"
 FRAME_FOLDER = "frames"
 OUTPUT_VIDEO = "output_video.mp4"
 FPS = 30
-NUM_COLOR_GROUPS = 11
-REVEAL_STEP = 10
+NUM_COLOR_GROUPS = 15
+REVEAL_STEP = 5
 FADE_DURATION = 1.0
 GLOW_RADIUS = 10
 GLOW_COLOR = (0, 255, 200)
 GLOW_MAX_ALPHA = 0.2
 PULSE_SPEED = 15.0
 PULSE_AMPLITUDE = 0.1
-SCALE_IMAGE = 0.08
+ON_HIGH = False
+SCALE_IMAGE = 0.2
+
 
 # --- UTILITY FUNCTIONS ---
 
@@ -140,7 +142,7 @@ def reveal_image_with_music():
             revealed_pixels = np.count_nonzero(np.any(black_image != 0, axis=2))
             revealed_ratio = revealed_pixels / total_pixels
 
-            if revealed_ratio <= 0.5 and msg.velocity >= 95:
+            if revealed_ratio <= 0.5 and msg.velocity >= 95 and msg.note < 60:
                 # Use a set to track unrevealed, non-dark pixels for efficient random selection
                 if not hasattr(reveal_image_with_music, "unrevealed_pixels"):
                     reveal_image_with_music.unrevealed_pixels = {
@@ -163,20 +165,56 @@ def reveal_image_with_music():
                         if revealed >= REVEAL_STEP:
                             break
             else:
-                if group_index < len(pixel_groups):
-                    group = pixel_groups[group_index]
-                    while group_cursor < len(group) and revealed < REVEAL_STEP:
-                        y, x = group[group_cursor]
-                        if not is_dark_pixel(image[y, x]) and np.all(black_image[y, x] == 0):
-                            black_image[y, x] = image[y, x]
-                            pulsing_pixels[(y, x)] = 0.0
-                            new_pixels_this_frame.append((y, x))
-                            fade_circles[(y, x)] = 0.0
-                            revealed += 1
-                        group_cursor += 1
-                    if group_cursor >= len(group):
-                        group_index += 1
-                        group_cursor = 0
+                # High note: reveal from center outward
+                if msg.note > 72 and ON_HIGH:
+                    center_y, center_x = image.shape[0] // 2, image.shape[1] // 2
+                    unrevealed = [
+                        (y, x)
+                        for y in range(image.shape[0])
+                        for x in range(image.shape[1])
+                        if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
+                    ]
+                    # Sort by distance from center (closest first)
+                    unrevealed.sort(key=lambda p: (p[0] - center_y) ** 2 + (p[1] - center_x) ** 2)
+                    for y, x in unrevealed[:REVEAL_STEP]:
+                        black_image[y, x] = image[y, x]
+                        pulsing_pixels[(y, x)] = 0.0
+                        new_pixels_this_frame.append((y, x))
+                        fade_circles[(y, x)] = 0.0
+                        revealed += 1
+                # Low note: reveal from edges inward
+                elif msg.note < 48 and ON_HIGH:
+                    center_y, center_x = image.shape[0] // 2, image.shape[1] // 2
+                    unrevealed = [
+                        (y, x)
+                        for y in range(image.shape[0])
+                        for x in range(image.shape[1])
+                        if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
+                    ]
+                    # Sort by distance from center (farthest first)
+                    unrevealed.sort(key=lambda p: -((p[0] - center_y) ** 2 + (p[1] - center_x) ** 2))
+                    for y, x in unrevealed[:REVEAL_STEP]:
+                        black_image[y, x] = image[y, x]
+                        pulsing_pixels[(y, x)] = 0.0
+                        new_pixels_this_frame.append((y, x))
+                        fade_circles[(y, x)] = 0.0
+                        revealed += 1
+                # Otherwise: group-based reveal
+                else:
+                    if group_index < len(pixel_groups):
+                        group = pixel_groups[group_index]
+                        while group_cursor < len(group) and revealed < REVEAL_STEP:
+                            y, x = group[group_cursor]
+                            if not is_dark_pixel(image[y, x]) and np.all(black_image[y, x] == 0):
+                                black_image[y, x] = image[y, x]
+                                pulsing_pixels[(y, x)] = 0.0
+                                new_pixels_this_frame.append((y, x))
+                                fade_circles[(y, x)] = 0.0
+                                revealed += 1
+                            group_cursor += 1
+                        if group_cursor >= len(group):
+                            group_index += 1
+                            group_cursor = 0
 
         # Update pulsing pixels
         for (y, x), phase in list(pulsing_pixels.items()):
