@@ -7,6 +7,7 @@ import math
 from sklearn.cluster import KMeans
 import pygame
 import os
+import random
 
 # --- CONFIGURATION ---
 IMAGE_PATH = "image.png"
@@ -99,7 +100,15 @@ def setup_frame_folder():
 
 # --- MAIN REVEAL LOOP ---
 
+
 def reveal_image_with_music():
+
+    overlay_active = False
+    overlay_start_time = 0
+    overlay_duration = 0.5  # seconds
+    overlay_opacity = 0.01   # 10% transparency
+
+
     image, black_image, image2, height_first, width_first = load_and_prepare_images()
     pixel_groups = group_pixels_by_color(image, num_groups=NUM_COLOR_GROUPS)
     group_index = 0
@@ -136,6 +145,11 @@ def reveal_image_with_music():
 
         # Reveal logic
         if msg.type == 'note_on' and msg.velocity > 0:
+
+            if msg.velocity <= 20 or random.random() < 0.5:
+                overlay_active = True
+                overlay_start_time = time.time()
+
             revealed = 0
             # Count revealed pixels
             total_pixels = image.shape[0] * image.shape[1]
@@ -237,8 +251,29 @@ def reveal_image_with_music():
             glow_with_fade[..., 3] = (glow_with_fade[..., 3].astype(np.float32) * alpha_factor).astype(np.uint8)
             overlay_rgba(big_version, glow_with_fade, (center_x, center_y))
 
+        # Transparent full-image overlay effect
+        if overlay_active:
+            print(1)
+            elapsed = time.time() - overlay_start_time
+            if elapsed <= overlay_duration:
+                # Blend the full image on top of black_image (gently)
+                overlay_image = cv2.addWeighted(
+                    big_version, 
+                    1.0, 
+                    cv2.resize(image, (width_first, height_first), interpolation=cv2.INTER_NEAREST), 
+                    overlay_opacity, 
+                    0
+                )
+                flash_opacity = 0.15
+                white_flash = np.full_like(big_version, 255)
+                overlay_image = cv2.addWeighted(overlay_image, 1.0, white_flash, flash_opacity, 0)
+                big_version = overlay_image
+            else:
+                overlay_active = False  # effect ends
         cv2.imshow("Revealing Image", big_version)
         frame_path = os.path.join(FRAME_FOLDER, f"frame_{frame_idx:05d}.png")
+        
+        
         cv2.imwrite(frame_path, big_version)
         frame_idx += 1
 
