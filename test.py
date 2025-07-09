@@ -12,12 +12,12 @@ import subprocess
 
 # --- CONFIGURATION ---
 IMAGE_PATH = "image.png"
-MIDI_PATH = "Etude_Op.25_No.11_in_A_minor_Winter_Wind_-_F._Chopin.mid"
-AUDIO_PATH = "Etude_Op.25_No.11_in_A_minor_Winter_Wind_-_F._Chopin.mp3"
+MIDI_PATH = "Can_You_Hear_The_Music__Ludwig_Gransson__from_Oppenheimer.mid"
+AUDIO_PATH = "Can_You_Hear_The_Music_–_Ludwig_Göransson_(from_Oppenheimer).mp3"
 FRAME_FOLDER = "frames"
 OUTPUT_VIDEO = "output_video.mp4"
-FPS = 30
-NUM_COLOR_GROUPS = 18
+FPS = 60
+NUM_COLOR_GROUPS = 17
 REVEAL_STEP = 5
 FADE_DURATION = 1.0
 GLOW_RADIUS = 10
@@ -26,7 +26,7 @@ GLOW_MAX_ALPHA = 0.2
 PULSE_SPEED = 15.0
 PULSE_AMPLITUDE = 0.1
 ON_HIGH = False
-SCALE_IMAGE = 0.2
+SCALE_IMAGE = 0.15
 
 
 # --- UTILITY FUNCTIONS ---
@@ -100,8 +100,10 @@ def setup_frame_folder():
     os.makedirs(FRAME_FOLDER, exist_ok=True)
 
 # --- MAIN REVEAL LOOP ---
-def reveal_image_with_music():
-    # Each overlay is a dict: {'start_time': float, 'duration': float, 'opacity': float}
+def reveal_image_with_music(mode="render", full_song=True):
+    """
+    mode: "render" for video+audio output, "view" for slow preview (no video file written)
+    """
     overlays = []
     glow_active = False
     glow_start_time = 0
@@ -114,22 +116,34 @@ def reveal_image_with_music():
     fade_circles = {}
     frame_idx = 0
 
+    # Calculate REVEAL_STEP for full song mode
+    if full_song:
+        total_pixels = image.shape[0] * image.shape[1]
+        # Count all note_on events with velocity > 0
+        midi, midi_file = prepare_audio_and_midi()
+        note_on_count = sum(1 for msg in midi_file if msg.type == 'note_on' and msg.velocity > 0)
+        global REVEAL_STEP
+        REVEAL_STEP = max(1, int(np.floor(total_pixels / note_on_count)))
+        print(f"[Full Song Mode] Calculated REVEAL_STEP: {REVEAL_STEP} (pixels per note)")
+    else:
+        midi, midi_file = prepare_audio_and_midi()
+
     dummy_image = cv2.resize(black_image, (width_first, height_first), interpolation=cv2.INTER_NEAREST)
     cv2.imshow("Revealing Image", dummy_image)
-    #time.sleep(1)
+    time.sleep(1)
 
-    midi, midi_file = prepare_audio_and_midi()
-    pygame.mixer.music.play()
-    start_time = time.time()
-
+    # Do NOT start pygame audio playback here; let ffmpeg handle audio sync in render mode
     scale_x = width_first / image.shape[1]
     scale_y = height_first / image.shape[0]
     glow_circle = make_glow_circle(GLOW_RADIUS, max_alpha=GLOW_MAX_ALPHA, color=GLOW_COLOR)
 
-    # Set up video writer (temporary video without audio)
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    temp_video_path = "temp_video_no_audio.mp4"
-    video_writer = cv2.VideoWriter(temp_video_path, fourcc, FPS, (width_first, height_first))
+    # Set up video writer (only in render mode)
+    if mode == "render":
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        temp_video_path = "temp_video_no_audio.mp4"
+        video_writer = cv2.VideoWriter(temp_video_path, fourcc, FPS, (width_first, height_first))
+    else:
+        video_writer = None
 
     # Convert to absolute MIDI timing
     midi_events = []
@@ -147,12 +161,28 @@ def reveal_image_with_music():
 
     quit_flag = False
 
-    while (event_idx < total_events or overlays or glow_active) and not quit_flag:
-        now = time.time()
-        elapsed = now - start_time
+    # Use MIDI duration for video length
+    if midi_events:
+        midi_total_time = midi_events[-1][0]
+    else:
+        midi_total_time = 0
 
-        # Process all MIDI messages up to current time
-        while event_idx < total_events and midi_events[event_idx][0] <= elapsed:
+    # In view mode, play audio for preview
+    if mode == "view":
+        pygame.mixer.music.play()
+        preview_start_time = time.time()
+
+    # Main loop: generate frames based on MIDI timing, not wall clock
+    video_time = 0.0
+    while video_time < midi_total_time and not quit_flag:
+        # In view mode, sync to real time (slow preview)
+        if mode == "view":
+            elapsed = time.time() - preview_start_time
+            if elapsed < video_time:
+                time.sleep(video_time - elapsed)
+
+        # Process all MIDI messages up to current video_time
+        while event_idx < total_events and midi_events[event_idx][0] <= video_time:
             msg_time, msg = midi_events[event_idx]
             event_idx += 1
 
@@ -160,10 +190,15 @@ def reveal_image_with_music():
 
             if msg.type == 'note_on' and msg.velocity > 0:
 
+                # Track note history (for trend detection)
+                note_history.append(msg.note)
+                if len(note_history) > 8:  # window size, adjust as needed
+                    note_history.pop(0)
+
                 # Only add overlay for ~40% of notes, and only if less than 17 seconds into the song
-                if random.random() < 0.4 and elapsed < 17:
+                if random.random() < 0 and video_time < 17:
                     overlays.append({
-                        'start_time': time.time(),
+                        'start_time': video_time,
                         'duration': 0.5,  # seconds
                         'opacity': 0.01   # 1% transparency
                     })
@@ -173,7 +208,7 @@ def reveal_image_with_music():
                 revealed_pixels = np.count_nonzero(np.any(black_image != 0, axis=2))
                 revealed_ratio = revealed_pixels / total_pixels
 
-                if revealed_ratio <= 0.5 and msg.velocity >= 95 and msg.note < 60:
+                if revealed_ratio <= 0.99 and msg.velocity >= 9 and msg.note < 60:
                     if not hasattr(reveal_image_with_music, "unrevealed_pixels"):
                         reveal_image_with_music.unrevealed_pixels = {
                             (y, x)
@@ -186,14 +221,16 @@ def reveal_image_with_music():
                         choices = list(unrevealed)
                         np.random.shuffle(choices)
                         for y, x in choices:
-                            black_image[y, x] = image[y, x]
-                            pulsing_pixels[(y, x)] = 0.0
-                            new_pixels_this_frame.append((y, x))
-                            fade_circles[(y, x)] = 0.0
-                            unrevealed.remove((y, x))
-                            revealed += 1
-                            if revealed >= REVEAL_STEP:
-                                break
+                            # Only fill if still black (not revealed by another branch)
+                            if np.all(black_image[y, x] == 0):
+                                black_image[y, x] = image[y, x]
+                                pulsing_pixels[(y, x)] = 0.0
+                                new_pixels_this_frame.append((y, x))
+                                fade_circles[(y, x)] = 0.0
+                                unrevealed.remove((y, x))
+                                revealed += 1
+                                if revealed >= REVEAL_STEP:
+                                    break
                 else:
                     # High note: reveal from center outward
                     if msg.note > 72 and ON_HIGH:
@@ -246,7 +283,7 @@ def reveal_image_with_music():
 
         # Update pulsing pixels
         for (y, x), phase in list(pulsing_pixels.items()):
-            phase += 2 * math.pi * PULSE_SPEED * 0.01
+            phase += 2 * math.pi * PULSE_SPEED * frame_duration
             pulse = (math.sin(phase) * 0.5 + 0.5) * PULSE_AMPLITUDE + (1 - PULSE_AMPLITUDE)
             orig_color = image[y, x].astype(np.float32)
             pulsed_color = np.clip(orig_color * pulse, 0, 255)
@@ -277,7 +314,7 @@ def reveal_image_with_music():
         overlay_img = cv2.resize(image, (width_first, height_first), interpolation=cv2.INTER_NEAREST)
         overlays_to_remove = []
         for overlay in overlays:
-            elapsed_overlay = time.time() - overlay['start_time']
+            elapsed_overlay = video_time - overlay['start_time']
             if elapsed_overlay <= overlay['duration']:
                 fade = max(0, 1 - elapsed_overlay / overlay['duration'])
                 opacity = overlay['opacity'] * fade
@@ -298,10 +335,13 @@ def reveal_image_with_music():
         for overlay in overlays_to_remove:
             overlays.remove(overlay)
 
+        # Show current time in view mode
+        print(f"Current time: {video_time:.2f} seconds")
+
         cv2.imshow("Revealing Image", big_version)
-        cv2.imwrite(f"{FRAME_FOLDER}/frame_{frame_idx:05d}.png", big_version)
-        # Write frame to video
-        video_writer.write(big_version)
+        if mode == "render":
+            cv2.imwrite(f"{FRAME_FOLDER}/frame_{frame_idx:05d}.png", big_version)
+            video_writer.write(big_version)
 
         frame_idx += 1
 
@@ -310,30 +350,30 @@ def reveal_image_with_music():
             quit_flag = True
             break
 
-        time.sleep(frame_duration)
-    cv2.destroyAllWindows()
-    video_writer.release()
+        video_time += frame_duration
 
-    # --- Combine video and audio using ffmpeg ---
-    # This requires ffmpeg to be installed and available in PATH.
-    # The final video will be OUTPUT_VIDEO with audio from AUDIO_PATH.
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", temp_video_path,
-        "-i", AUDIO_PATH,
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        OUTPUT_VIDEO
-    ]
-    print("Combining video and audio with ffmpeg...")
-    subprocess.run(cmd, check=True)
-    print(f"Video with audio saved to {OUTPUT_VIDEO}")
-    # Optionally remove temp video
-    os.remove(temp_video_path)
+    cv2.destroyAllWindows()
+    if mode == "render" and video_writer is not None:
+        video_writer.release()
+        # --- Combine video and audio using ffmpeg ---
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", temp_video_path,
+            "-i", AUDIO_PATH,
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            OUTPUT_VIDEO
+        ]
+        print("Combining video and audio with ffmpeg...")
+        subprocess.run(cmd, check=True)
+        print(f"Video with audio saved to {OUTPUT_VIDEO}")
+        os.remove(temp_video_path)
+    elif mode == "view":
+        pygame.mixer.music.stop()
 
 # def reveal_image_with_music():
 
