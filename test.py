@@ -16,17 +16,19 @@ MIDI_PATH = "Vivaldi_-_Violin_Concerto_in_F_minor_Op._8_No._4_RV._297_Winter_for
 AUDIO_PATH = "Vivaldi_-_Violin_Concerto_in_F_minor_Op._8_No._4_RV._297_Winter_for_Solo_Piano.mp3"
 FRAME_FOLDER = "frames"
 OUTPUT_VIDEO = "output_video.mp4"
-FPS = 60
+START_TIME = 55.3  # seconds
+RANDOM_GROUP_SEED = 17  # 22
+FPS = 10
 NUM_COLOR_GROUPS = 16
-REVEAL_STEP = 8 # 8 for 
+REVEAL_STEP = 15 # 15
 FADE_DURATION = 1.0
 GLOW_RADIUS = 10
 GLOW_COLOR = (0, 255, 200)
-GLOW_MAX_ALPHA = 0.8
-PULSE_SPEED = 0.5 # 15 default
+GLOW_MAX_ALPHA = 0.5
+PULSE_SPEED = 5 # 15 default
 PULSE_AMPLITUDE = 0.05 # 0.3 default
 ON_HIGH = False
-SCALE_IMAGE = 0.18 # 0.12
+SCALE_IMAGE = 0.19 # 0.23
 
 # --- UTILITY FUNCTIONS ---
 
@@ -312,6 +314,20 @@ def try_add_bee(video_time, height, width):
         }
         BUMBLEBEES.append(new_bee)
 
+
+import subprocess
+
+TRIMMED_AUDIO = "trimmed_audio.mp3"
+
+
+subprocess.run([
+    "ffmpeg", "-y",
+    "-ss", str(START_TIME),
+    "-i", AUDIO_PATH,
+    "-acodec", "copy",
+    TRIMMED_AUDIO
+])
+
 # --- MAIN REVEAL LOOP ---
 def reveal_image_with_music(mode="render", full_song=False):
     """
@@ -331,7 +347,7 @@ def reveal_image_with_music(mode="render", full_song=False):
     pixel_groups = group_pixels_by_color(image, num_groups=NUM_COLOR_GROUPS)
 
     # --- Randomize group sequence with a seed ---
-    RANDOM_GROUP_SEED = 36  # Change this for different random orders
+    
     random.seed(RANDOM_GROUP_SEED)
     random.shuffle(pixel_groups)
 
@@ -377,8 +393,15 @@ def reveal_image_with_music(mode="render", full_song=False):
         current_time_sec += msg.time
         midi_events.append((current_time_sec, msg))
 
+    
+    # Skip all events before START_TIME
     event_idx = 0
+
     total_events = len(midi_events)
+    while event_idx < total_events and midi_events[event_idx][0] < START_TIME:
+        event_idx += 1
+
+    
 
     frame_idx = 0
     fps = FPS
@@ -397,10 +420,11 @@ def reveal_image_with_music(mode="render", full_song=False):
     # In view mode, play audio for preview
     if mode == "view":
         pygame.mixer.music.play()
-        preview_start_time = time.time()
+        preview_start_time = time.time() - START_TIME
+        
 
     # Main loop: generate frames based on MIDI timing, not wall clock
-    video_time = 0.0
+    video_time = START_TIME
     while video_time < midi_total_time and not quit_flag:
         # In view mode, sync to real time (slow preview)
         if mode == "view":
@@ -450,10 +474,10 @@ def reveal_image_with_music(mode="render", full_song=False):
                         # Update this bee (reveal cluster etc)
                         new_pixels = update_bee(image, black_image, pulsing_pixels, fade_circles, video_time, bee)
 
-                elif msg.note > 72:
+                elif msg.note > 120:
                     new_pixels = reveal_from_random_cluster(image, black_image, revealed_pixels, REVEAL_STEP, pulsing_pixels, fade_circles)
 
-                elif revealed_ratio <= 0.99 and msg.velocity >= 60 and msg.note < 0:
+                elif revealed_ratio <= 0.99 and msg.velocity >= 60 and msg.note < 60:
                     new_pixels = reveal_from_random_global_cache(image, black_image, REVEAL_STEP, pulsing_pixels, fade_circles)
 
                 elif msg.note > 72 and ON_HIGH:
@@ -563,7 +587,7 @@ def reveal_image_with_music(mode="render", full_song=False):
             "ffmpeg",
             "-y",
             "-i", temp_video_path,
-            "-i", AUDIO_PATH,
+            "-i", TRIMMED_AUDIO,
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-c:v", "copy",
