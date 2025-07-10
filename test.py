@@ -12,22 +12,21 @@ import subprocess
 
 # --- CONFIGURATION ---
 IMAGE_PATH = "image.png"
-MIDI_PATH = "Can_You_Hear_The_Music__Ludwig_Gransson__from_Oppenheimer.mid"
-AUDIO_PATH = "Can_You_Hear_The_Music_–_Ludwig_Göransson_(from_Oppenheimer).mp3"
+MIDI_PATH = "Vivaldi_-_Violin_Concerto_in_F_minor_Op._8_No._4_RV._297_Winter_for_Solo_Piano.mid"
+AUDIO_PATH = "Vivaldi_-_Violin_Concerto_in_F_minor_Op._8_No._4_RV._297_Winter_for_Solo_Piano.mp3"
 FRAME_FOLDER = "frames"
 OUTPUT_VIDEO = "output_video.mp4"
 FPS = 60
-NUM_COLOR_GROUPS = 17
-REVEAL_STEP = 5
+NUM_COLOR_GROUPS = 16
+REVEAL_STEP = 8 # 8 for 
 FADE_DURATION = 1.0
 GLOW_RADIUS = 10
 GLOW_COLOR = (0, 255, 200)
-GLOW_MAX_ALPHA = 0.2
-PULSE_SPEED = 15.0
-PULSE_AMPLITUDE = 0.1
+GLOW_MAX_ALPHA = 0.8
+PULSE_SPEED = 0.5 # 15 default
+PULSE_AMPLITUDE = 0.05 # 0.3 default
 ON_HIGH = False
-SCALE_IMAGE = 0.15
-
+SCALE_IMAGE = 0.18 # 0.12
 
 # --- UTILITY FUNCTIONS ---
 
@@ -99,17 +98,243 @@ def prepare_audio_and_midi():
 def setup_frame_folder():
     os.makedirs(FRAME_FOLDER, exist_ok=True)
 
+# --- REVEAL LOGIC ---
+
+def reveal_from_random_cluster(image, black_image, revealed_pixels, REVEAL_STEP, pulsing_pixels, fade_circles):
+    # Pick a new center for every note
+    h, w = image.shape[:2]
+    spread = 0.3 + 0.4 * abs(revealed_pixels / (h * w) - 0.5)
+    jitter_x = random.uniform(-0.15, 0.15)
+    jitter_y = random.uniform(-0.15, 0.15)
+
+    center_x = random.randint(int(w * max(0.05, 0.5 - spread/2 + jitter_x)),
+                              int(w * min(0.95, 0.5 + spread/2 + jitter_x)))
+    center_y = random.randint(int(h * max(0.05, 0.5 - spread/2 + jitter_y)),
+                              int(h * min(0.95, 0.5 + spread/2 + jitter_y)))
+
+    unrevealed = [
+        (y, x)
+        for y in range(h)
+        for x in range(w)
+        if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
+    ]
+
+    np.random.shuffle(unrevealed)
+    unrevealed.sort(key=lambda p: ((p[0]-center_y)**2 + (p[1]-center_x)**2) * (1 + 0.2 * np.random.rand()))
+
+    return reveal_pixels(unrevealed[:REVEAL_STEP*2], image, black_image, pulsing_pixels, fade_circles)
+
+def reveal_from_random_global_cache(image, black_image, REVEAL_STEP, pulsing_pixels, fade_circles):
+    if not hasattr(reveal_from_random_global_cache, "unrevealed_pixels"):
+        reveal_from_random_global_cache.unrevealed_pixels = {
+            (y, x)
+            for y in range(image.shape[0])
+            for x in range(image.shape[1])
+            if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
+        }
+
+    unrevealed = reveal_from_random_global_cache.unrevealed_pixels
+    if not unrevealed:
+        return []
+
+    choices = list(unrevealed)
+    np.random.shuffle(choices)
+
+    new_pixels = []
+    revealed = 0
+    for y, x in choices:
+        if np.all(black_image[y, x] == 0):
+            black_image[y, x] = image[y, x]
+            pulsing_pixels[(y, x)] = 0.0
+            fade_circles[(y, x)] = (0.0, GLOW_COLOR)
+            new_pixels.append((y, x))
+            unrevealed.remove((y, x))
+            revealed += 1
+            if revealed >= REVEAL_STEP:
+                break
+
+    return new_pixels
+
+def reveal_pixels(pixels, image, black_image, pulsing_pixels, fade_circles):
+    revealed = []
+    for y, x in pixels:
+        if np.all(black_image[y, x] == 0):  # not already revealed
+            black_image[y, x] = image[y, x]
+            pulsing_pixels[(y, x)] = 0.0
+            fade_circles[(y, x)] = (0.0, GLOW_COLOR)
+            revealed.append((y, x))
+    return revealed
+
+def reveal_from_center_out(image, black_image, REVEAL_STEP, pulsing_pixels, fade_circles):
+    h, w = image.shape[:2]
+    center_y, center_x = h // 2, w // 2
+
+    unrevealed = [
+        (y, x)
+        for y in range(h)
+        for x in range(w)
+        if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
+    ]
+    unrevealed.sort(key=lambda p: (p[0]-center_y)**2 + (p[1]-center_x)**2)
+
+    return reveal_pixels(unrevealed[:REVEAL_STEP], image, black_image, pulsing_pixels, fade_circles)
+
+def reveal_from_edges_in(image, black_image, REVEAL_STEP, pulsing_pixels, fade_circles):
+    h, w = image.shape[:2]
+    center_y, center_x = h // 2, w // 2
+
+    unrevealed = [
+        (y, x)
+        for y in range(h)
+        for x in range(w)
+        if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
+    ]
+    unrevealed.sort(key=lambda p: -((p[0]-center_y)**2 + (p[1]-center_x)**2))
+
+    return reveal_pixels(unrevealed[:REVEAL_STEP], image, black_image, pulsing_pixels, fade_circles)
+
+def reveal_grouped(group, group_cursor, REVEAL_STEP, image, black_image, pulsing_pixels, fade_circles):
+    revealed = 0
+    new_pixels = []
+    while group_cursor < len(group) and revealed < REVEAL_STEP:
+        y, x = group[group_cursor]
+        if not is_dark_pixel(image[y, x]) and np.all(black_image[y, x] == 0):
+            black_image[y, x] = image[y, x]
+            pulsing_pixels[(y, x)] = 0.0
+            fade_circles[(y, x)] = (0.0, GLOW_COLOR)
+            new_pixels.append((y, x))
+            revealed += 1
+        group_cursor += 1
+    return new_pixels, group_cursor
+
+NUM_BEES = 0  # or however many bees you want initially
+
+BUMBLEBEES = [
+    {
+        "pos": (150, 150),
+        "velocity": (0.0, 0.0),
+        "note_times": [],
+        "glow_color": (random.randint(128, 255), random.randint(128, 255), random.randint(128, 255))
+    }
+    for _ in range(NUM_BEES)
+]
+
+
+
+def update_bee(image, black_image, pulsing_pixels, fade_circles, video_time, bee):
+    h, w = image.shape[:2]
+    pos_y, pos_x = bee["pos"]
+    vel_y, vel_x = bee["velocity"]
+    note_times = bee["note_times"]
+    color = bee["glow_color"]
+
+    note_density = len(note_times) / 0.5
+    speed = min(7.0, 0.5 + note_density * 0.3)
+
+    search_radius = 20
+    candidates = []
+    for dy in range(-search_radius, search_radius + 1):
+        for dx in range(-search_radius, search_radius + 1):
+            ny = pos_y + dy
+            nx = pos_x + dx
+            if 0 <= ny < h and 0 <= nx < w:
+                if np.all(black_image[ny, nx] == 0) and not is_dark_pixel(image[ny, nx]):
+                    candidates.append((ny, nx))
+
+    if candidates:
+        target_y, target_x = random.choice(candidates)
+        dir_y = target_y - pos_y
+        dir_x = target_x - pos_x
+        norm = math.sqrt(dir_y**2 + dir_x**2) + 1e-5
+        dir_y /= norm
+        dir_x /= norm
+
+        jitter_angle = random.uniform(-math.pi / 6, math.pi / 6)
+        angle = math.atan2(dir_y, dir_x) + jitter_angle
+        vel_x = speed * math.cos(angle)
+        vel_y = speed * math.sin(angle)
+    else:
+        vel_y = random.uniform(-1, 1) * speed
+        vel_x = random.uniform(-1, 1) * speed
+
+    new_y = int(pos_y + vel_y)
+    new_x = int(pos_x + vel_x)
+    new_y = max(0, min(h - 1, new_y))
+    new_x = max(0, min(w - 1, new_x))
+
+    fade_circles[(new_y, new_x)] = (0.0, color)
+
+    bee["pos"] = (new_y, new_x)
+    bee["velocity"] = (vel_y, vel_x)
+
+    cluster = []
+    for _ in range(4):
+        dy = random.randint(-1, 1)
+        dx = random.randint(-1, 1)
+        cy = min(max(0, new_y + dy), h - 1)
+        cx = min(max(0, new_x + dx), w - 1)
+        if np.all(black_image[cy, cx] == 0) and not is_dark_pixel(image[cy, cx]):
+            black_image[cy, cx] = image[cy, cx]
+            pulsing_pixels[(cy, cx)] = 0.0
+            fade_circles[(cy, cx)] = (0.0, color)
+            cluster.append((cy, cx))
+
+    return cluster
+
+
+def make_white_glow_mask(radius, max_alpha):
+    size = radius * 2 + 1
+    glow = np.zeros((size, size, 4), dtype=np.uint8)
+    
+    center = radius
+    for y in range(size):
+        for x in range(size):
+            dist = np.sqrt((x - center) ** 2 + (y - center) ** 2)
+            fade = max(0, 1 - dist / radius)
+            alpha = int(max_alpha * 255 * fade)
+            glow[y, x] = [255, 255, 255, alpha]  # White RGB, fading alpha
+    return glow
+
+BEES = []
+
+LAST_BEE_ADD_TIME = -float('inf')
+BEE_ADD_INTERVAL = 5.0  # seconds
+
+def try_add_bee(video_time, height, width):
+    global LAST_BEE_ADD_TIME
+    if video_time - LAST_BEE_ADD_TIME >= BEE_ADD_INTERVAL:
+        LAST_BEE_ADD_TIME = video_time
+        new_bee = {
+            "pos": (random.randint(0, height - 1), random.randint(0, width - 1)),
+            "velocity": (0.0, 0.0),
+            "note_times": [],
+            "glow_color": (random.randint(128, 255), random.randint(128, 255), random.randint(128, 255)),
+        }
+        BUMBLEBEES.append(new_bee)
+
 # --- MAIN REVEAL LOOP ---
-def reveal_image_with_music(mode="render", full_song=True):
+def reveal_image_with_music(mode="render", full_song=False):
     """
     mode: "render" for video+audio output, "view" for slow preview (no video file written)
     """
+    
+    #score.parts[0].measures(13, 14).show('text')
+
     overlays = []
     glow_active = False
     glow_start_time = 0
 
+    # Initialize prev_velocity attribute for accented note detection
+    reveal_image_with_music.prev_velocity = None
+
     image, black_image, image2, height_first, width_first = load_and_prepare_images()
     pixel_groups = group_pixels_by_color(image, num_groups=NUM_COLOR_GROUPS)
+
+    # --- Randomize group sequence with a seed ---
+    RANDOM_GROUP_SEED = 36  # Change this for different random orders
+    random.seed(RANDOM_GROUP_SEED)
+    random.shuffle(pixel_groups)
+
     group_index = 0
     group_cursor = 0
     pulsing_pixels = {}
@@ -135,7 +360,7 @@ def reveal_image_with_music(mode="render", full_song=True):
     # Do NOT start pygame audio playback here; let ffmpeg handle audio sync in render mode
     scale_x = width_first / image.shape[1]
     scale_y = height_first / image.shape[0]
-    glow_circle = make_glow_circle(GLOW_RADIUS, max_alpha=GLOW_MAX_ALPHA, color=GLOW_COLOR)
+    glow_mask = make_white_glow_mask(GLOW_RADIUS, GLOW_MAX_ALPHA)
 
     # Set up video writer (only in render mode)
     if mode == "render":
@@ -183,6 +408,9 @@ def reveal_image_with_music(mode="render", full_song=True):
             if elapsed < video_time:
                 time.sleep(video_time - elapsed)
 
+        h, w = image.shape[:2]
+        try_add_bee(video_time, w, h)
+
         # Process all MIDI messages up to current video_time
         while event_idx < total_events and midi_events[event_idx][0] <= video_time:
             msg_time, msg = midi_events[event_idx]
@@ -191,7 +419,6 @@ def reveal_image_with_music(mode="render", full_song=True):
             new_pixels_this_frame = []
 
             if msg.type == 'note_on' and msg.velocity > 0:
-
                 # Track note history (for trend detection)
                 note_history.append(msg.note)
                 if len(note_history) > 8:  # window size, adjust as needed
@@ -208,80 +435,42 @@ def reveal_image_with_music(mode="render", full_song=True):
                 revealed = 0
                 total_pixels = image.shape[0] * image.shape[1]
                 revealed_pixels = np.count_nonzero(np.any(black_image != 0, axis=2))
+
                 revealed_ratio = revealed_pixels / total_pixels
 
-                if revealed_ratio <= 0.99 and msg.velocity >= 9 and msg.note < 60:
-                    if not hasattr(reveal_image_with_music, "unrevealed_pixels"):
-                        reveal_image_with_music.unrevealed_pixels = {
-                            (y, x)
-                            for y in range(image.shape[0])
-                            for x in range(image.shape[1])
-                            if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
-                        }
-                    unrevealed = reveal_image_with_music.unrevealed_pixels
-                    if unrevealed:
-                        choices = list(unrevealed)
-                        np.random.shuffle(choices)
-                        for y, x in choices:
-                            # Only fill if still black (not revealed by another branch)
-                            if np.all(black_image[y, x] == 0):
-                                black_image[y, x] = image[y, x]
-                                pulsing_pixels[(y, x)] = 0.0
-                                new_pixels_this_frame.append((y, x))
-                                fade_circles[(y, x)] = 0.0
-                                unrevealed.remove((y, x))
-                                revealed += 1
-                                if revealed >= REVEAL_STEP:
-                                    break
+
+                if False:
+                    for bee in BUMBLEBEES:
+                        # Append current note timestamp to this bee's note_times
+                        bee["note_times"].append(video_time)
+
+                        # Remove timestamps older than 0.5 seconds
+                        bee["note_times"] = [t for t in bee["note_times"] if video_time - t <= 0.5]
+
+                        # Update this bee (reveal cluster etc)
+                        new_pixels = update_bee(image, black_image, pulsing_pixels, fade_circles, video_time, bee)
+
+                elif msg.note > 72:
+                    new_pixels = reveal_from_random_cluster(image, black_image, revealed_pixels, REVEAL_STEP, pulsing_pixels, fade_circles)
+
+                elif revealed_ratio <= 0.99 and msg.velocity >= 60 and msg.note < 0:
+                    new_pixels = reveal_from_random_global_cache(image, black_image, REVEAL_STEP, pulsing_pixels, fade_circles)
+
+                elif msg.note > 72 and ON_HIGH:
+                    new_pixels = reveal_from_center_out(image, black_image, REVEAL_STEP, pulsing_pixels, fade_circles)
+
+                elif msg.note < 48 and ON_HIGH:
+                    new_pixels = reveal_from_edges_in(image, black_image, REVEAL_STEP, pulsing_pixels, fade_circles)
+
                 else:
-                    # High note: reveal from center outward
-                    if msg.note > 72 and ON_HIGH:
-                        center_y, center_x = image.shape[0] // 2, image.shape[1] // 2
-                        unrevealed = [
-                            (y, x)
-                            for y in range(image.shape[0])
-                            for x in range(image.shape[1])
-                            if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
-                        ]
-                        unrevealed.sort(key=lambda p: (p[0] - center_y) ** 2 + (p[1] - center_x) ** 2)
-                        for y, x in unrevealed[:REVEAL_STEP]:
-                            black_image[y, x] = image[y, x]
-                            pulsing_pixels[(y, x)] = 0.0
-                            new_pixels_this_frame.append((y, x))
-                            fade_circles[(y, x)] = 0.0
-                            revealed += 1
-                    # Low note: reveal from edges inward
-                    elif msg.note < 48 and ON_HIGH:
-                        center_y, center_x = image.shape[0] // 2, image.shape[1] // 2
-                        unrevealed = [
-                            (y, x)
-                            for y in range(image.shape[0])
-                            for x in range(image.shape[1])
-                            if np.all(black_image[y, x] == 0) and not is_dark_pixel(image[y, x])
-                        ]
-                        unrevealed.sort(key=lambda p: -((p[0] - center_y) ** 2 + (p[1] - center_x) ** 2))
-                        for y, x in unrevealed[:REVEAL_STEP]:
-                            black_image[y, x] = image[y, x]
-                            pulsing_pixels[(y, x)] = 0.0
-                            new_pixels_this_frame.append((y, x))
-                            fade_circles[(y, x)] = 0.0
-                            revealed += 1
-                    # Otherwise: group-based reveal
-                    else:
-                        if group_index < len(pixel_groups):
-                            group = pixel_groups[group_index]
-                            while group_cursor < len(group) and revealed < REVEAL_STEP:
-                                y, x = group[group_cursor]
-                                if not is_dark_pixel(image[y, x]) and np.all(black_image[y, x] == 0):
-                                    black_image[y, x] = image[y, x]
-                                    pulsing_pixels[(y, x)] = 0.0
-                                    new_pixels_this_frame.append((y, x))
-                                    fade_circles[(y, x)] = 0.0
-                                    revealed += 1
-                                group_cursor += 1
-                            if group_cursor >= len(group):
-                                group_index += 1
-                                group_cursor = 0
+                    if group_index < len(pixel_groups):
+                        group = pixel_groups[group_index]
+                        new_pixels, group_cursor = reveal_grouped(group, group_cursor, REVEAL_STEP, image, black_image, pulsing_pixels, fade_circles)
+                        if group_cursor >= len(group):
+                            group_index += 1
+                            group_cursor = 0
+
+                new_pixels_this_frame.extend(new_pixels)
 
         # Update pulsing pixels
         for (y, x), phase in list(pulsing_pixels.items()):
@@ -298,19 +487,31 @@ def reveal_image_with_music(mode="render", full_song=True):
         # Overlay glow circles
         to_remove = []
         for key in fade_circles:
-            fade_circles[key] += frame_duration
-            if fade_circles[key] > FADE_DURATION:
+            age, color = fade_circles[key]
+            age += frame_duration
+            if age > FADE_DURATION:
                 to_remove.append(key)
+            else:
+                fade_circles[key] = (age, color)  # Update with new age
+
         for key in to_remove:
             fade_circles.pop(key)
 
-        for (y, x), age in fade_circles.items():
+        for (y, x), (age, color) in fade_circles.items():
             alpha_factor = max(0, 1 - age / FADE_DURATION)
             center_x = int(round(x * scale_x + scale_x / 2)) - GLOW_RADIUS
             center_y = int(round(y * scale_y + scale_y / 2)) - GLOW_RADIUS
-            glow_with_fade = glow_circle.copy()
-            glow_with_fade[..., 3] = (glow_with_fade[..., 3].astype(np.float32) * alpha_factor).astype(np.uint8)
-            overlay_rgba(big_version, glow_with_fade, (center_x, center_y))
+
+            glow_faded = np.zeros_like(glow_mask)
+
+            # Recolor RGB channels
+            for c in range(3):
+                glow_faded[..., c] = (glow_mask[..., 3].astype(np.float32) * color[c] / 255).astype(np.uint8)
+
+            # Fade alpha channel
+            glow_faded[..., 3] = (glow_mask[..., 3].astype(np.float32) * alpha_factor).astype(np.uint8)
+
+            overlay_rgba(big_version, glow_faded, (center_x, center_y))
 
         # Transparent full-image overlay effects (multiple, async)
         overlay_img = cv2.resize(image, (width_first, height_first), interpolation=cv2.INTER_NEAREST)

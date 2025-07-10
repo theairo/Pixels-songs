@@ -1,9 +1,11 @@
-# Prepare frame for display and saving
-        # if overlay_active:
-        #     elapsed = time.time() - overlay_start_time
-        #     if elapsed <= overlay_duration:
-        #         # Blend the full image on top of black_image (gently)
-        #         overlay_image = cv2.addWeighted(big_version, 1.0, cv2.resize(image2, (width_first, height_first)), overlay_opacity, 0)
-        #         big_version = overlay_image
-        #     else:
-        #         overlay_active = False  # effect ends
+cluster = []
+    for _ in range(4):
+        dy = random.randint(-1, 1)
+        dx = random.randint(-1, 1)
+        cy = min(max(0, new_y + dy), h - 1)
+        cx = min(max(0, new_x + dx), w - 1)
+        if np.all(black_image[cy, cx] == 0) and not is_dark_pixel(image[cy, cx]):
+            black_image[cy, cx] = image[cy, cx]
+            pulsing_pixels[(cy, cx)] = 0.0
+            fade_circles[(cy, cx)] = (0.0, color)
+            cluster.append((cy, cx))
