@@ -1,18 +1,18 @@
-Pixels-songs
+# Pixels-songs
 
-Project Description
+## Project Description
 
 This project explores algorithmic composition by generating musical sequences directly from image pixel data. It reads the pixels of an image and translates their color or brightness values into musical notes, creating a unique "song" for any given image.
 
 This was built as a personal project to learn more about creative AI applications and generative art.
 
-Technologies Used
+## Technologies Used
 
 Python
 
 (You can add other libraries here, e.g., PIL (Pillow) for image processing, numpy for data manipulation, or mido/midiutil for creating MIDI files)
 
-How to Run
+## How to Run
 
 Clone the repository:
 
