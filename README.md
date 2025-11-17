@@ -6,11 +6,23 @@ This project explores algorithmic composition by generating musical sequences di
 
 This was built as a personal project to learn more about creative AI applications and generative art.
 
+Demo Video
+
+Click the thumbnail below to see (and hear) an example of the output:
+
 ## Technologies Used
 
-Python
+- Python
 
-(You can add other libraries here, e.g., PIL (Pillow) for image processing, numpy for data manipulation, or mido/midiutil for creating MIDI files)
+- OpenCV (cv2): For reading and processing image pixel data.
+
+- NumPy: For numerical operations and array manipulation.
+
+- Scikit-learn (sklearn): Used for K-Means clustering to analyze image color palettes.
+
+- Mido & Pretty MIDI: For creating, manipulating, and saving MIDI music files.
+
+- Pygame: For audio playback.
 
 ## How to Run
 
@@ -20,15 +32,18 @@ git clone [https://github.com/theairo/Pixels-songs.git](https://github.com/theai
 cd Pixels-songs
 
 
-Install any necessary libraries:
+Install the necessary libraries:
 
-pip install -r requirements.txt 
-
-Run the main script with an image:
-
-python main.py your_image.png
+pip install -r requirements.txt
 
 
-Project Status
+Run the main script from the root folder:
 
-In-development student project.
+python src/main.py
+
+
+(Note: The input and output files are set inside src/main.py)
+
+## Project Status
+
+Finished project.
