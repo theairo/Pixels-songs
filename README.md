@@ -9,6 +9,7 @@ This was built as a personal project to learn more about creative AI application
 Demo Video
 
 Click the thumbnail below to see (and hear) an example of the output:
+https://youtube.com/shorts/_0TI31d0Xos
 
 ## Technologies Used
 
