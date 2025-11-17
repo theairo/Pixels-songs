@@ -1,0 +1,30 @@
+Python cache & virtual environment
+
+pycache/
+*.pyc
+.venv/
+venv/
+env/
+
+OS-specific files
+
+.DS_Store
+Thumbs.db
+
+IDE / Editor configuration
+
+.vscode/
+.idea/
+
+Temporary editor files
+
+*.sfk
+tempCodeRunnerFile.py
+
+--- Project-Specific ---
+
+Ignore all generated output files
+
+This includes .mp4, .mp3, and the 'frames' folder
+
+data/output/

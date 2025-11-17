@@ -1,0 +1,6 @@
+opencv-python
+numpy
+mido
+pretty-midi
+scikit-learn
+pygame
